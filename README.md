@@ -4,6 +4,12 @@ backend for https://tzwolak.com/map.html
 
 ## Dev
 
+    cd infrastructure && terraform apply
+
+    cp .env.example .env
+
+fill out `.env` with info from terraform and your oidc provider (keycloak or auth0)
+
     docker compose start db
 
     psql -h localhost -U postgres

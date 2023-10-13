@@ -16,7 +16,7 @@ const postgres = require("postgres");
 const jose = require("jose");
 
 const client = new S3Client({ region: "us-east-2" });
-const bucket = "dev-sota-user-data-private";
+const bucket = process.env.S3_BUCKET;
 
 const app = new Koa();
 const router = new Router();
