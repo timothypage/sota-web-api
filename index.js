@@ -33,6 +33,26 @@ sql`SELECT 1`.catch((e) => {
   process.exit(1);
 }); // fail early if database is unavailable
 
+// database col "gpx_info.duration_secs" to obj { ..., gpx_info: { duration_secs: <>, ... }}
+function toNested(arr) {
+  for (const obj of arr) {
+    for (const key of Object.keys(obj)) {
+      const path_parts = key.split(".");
+      if (path_parts.length > 1) {
+        if (obj[path_parts[0]] == null) {
+          obj[path_parts[0]] = { [path_parts[1]]: obj[key] };
+        } else {
+          obj[path_parts[0]][path_parts[1]] = obj[key];
+        }
+
+        delete obj[key];
+      }
+    }
+  }
+
+  return arr;
+}
+
 let user_files_params = ["filename"];
 
 const JWKS = jose.createRemoteJWKSet(new URL(process.env.OIDC_JWKS_URL));
@@ -50,7 +70,11 @@ const jwt = async (ctx, next) => {
 
   try {
     const jwt = ctx.headers.authorization.split(" ")[1];
-    const { payload, protectedHeader } = await jose.jwtVerify(jwt, JWKS, jwtVerifyOptions);
+    const { payload, protectedHeader } = await jose.jwtVerify(
+      jwt,
+      JWKS,
+      jwtVerifyOptions
+    );
     ctx.state.subject = payload.sub;
   } catch (e) {
     console.log(e);
@@ -69,17 +93,23 @@ router
   .get("/user-files", jwt, async (ctx) => {
     const results = await sql`
       SELECT
-        id,
+        user_files.id,
         oidc_subject,
         filename,
         s3_key,
         created_at,
-        updated_at
+        updated_at,
+
+        gpx_info.duration_secs as "gpx_info.duration_secs",
+        gpx_info.distance_ft as "gpx_info.distance_ft", 
+        gpx_info.gained_elevation_ft as "gpx_info.gained_elevation_ft",
+        gpx_info.lost_elevation_ft as "gpx_info.lost_elevation_ft"
       FROM user_files
+      LEFT JOIN gpx_info ON user_files.id = gpx_info.user_file_id
       WHERE oidc_subject = ${ctx.state.subject}
     `;
 
-    ctx.body = results;
+    ctx.body = toNested(results);
   })
 
   .get("/user-files/:id/fetch", jwt, async (ctx) => {
@@ -106,14 +136,15 @@ router
 
   .post("/user-files", jwt, async (ctx) => {
     const p = strongParams(ctx.request.body, user_files_params);
+    const gpx_info = ctx.request.body.gpx_info;
 
     const s3_key = uuid.v4();
 
-    // might need to change this to restrict content-length 
+    // might need to change this to restrict content-length
     // https://advancedweb.hu/how-to-use-s3-post-signed-urls/
     // const AWS = require("aws-sdk");
     // const s3 = new AWS.S3({signatureVersion: "v4"});
-    // 
+    //
     // s3.createPresignedPost({
     //   ...
     //   Conditions: [["content-length-range",  0, 1000000], ...], // content length restrictions: 0-1MB
@@ -138,10 +169,25 @@ router
       ) RETURNING id, oidc_subject, filename, created_at`;
 
     ctx.body = { ...result[0], upload_url };
+
+    if (gpx_info) {
+      gpx_info.user_file_id = result[0].id;
+
+      await sql`INSERT INTO gpx_info ${sql(
+        gpx_info,
+        "user_file_id",
+        "duration_secs",
+        "distance_ft",
+        "gained_elevation_ft",
+        "lost_elevation_ft"
+      )}`;
+
+      ctx.body.gpx_info = gpx_info;
+    }
   })
 
-  .get('/status', (ctx) => {
-    ctx.body = {status: "ok"};
+  .get("/status", (ctx) => {
+    ctx.body = { status: "ok" };
   });
 
 app.use(router.routes());
